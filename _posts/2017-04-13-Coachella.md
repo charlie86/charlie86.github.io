@@ -509,12 +509,15 @@ hchart(artist_plot_df, hcaes(x = xvar, y = yvar, group = cluster), type = 'scatt
 
 [Click to view plot in new window](/htmlwidgets/coachellar/exploratory_plot.html){:target="_blank"}
 
-This plot put almost everyone from Cluster 2 into the bottom right quadrant, which I interpreted as "EDM/Experimental," since these artists tended to have high danceability, a high probability of being instrumental, a low probability of being acoustic, and high valence. A few interesting bands in this cluster were Radiohead and Hans Zimmer - Radiohead has definitely gotten more electronic over time, and Hans Zimmer's film scores are kind of in a league of their own. Seeing Nicolaas Jaar tied it together a bit, since he mixes a lot of acoustic sounds into his electronic music.
+#### Cluster #1: "Hip-hop/Rock"
+Almost all artists from Cluster 1 fell into the bottom left quadrant, indicative of high valence but low danceability, acousticness, and instrumentalness. Here's where headliners Kendirck Lamar and Lady Gaga fell, with a couple punk banks in the far bottom left.
 
-Almost all artists from Cluster 1 fell into the bottom left quadrant, "Hip-hop/Rock," indicative of high valence but low danceability, acousticness, and instrumentalness. Here's where headliners Kendirck Lamar and Lady Gaga fell, with a couple punk banks in the far bottom left.
+#### Cluster #2: "EDM/Experimental"
+The bottom right quadrant is almost entirely made up of Cluster #2. These artists tended to have high danceability, a high probability of being instrumental, a low probability of being acoustic, and high valence. A few interesting bands in this cluster were Radiohead and Hans Zimmer - Radiohead has definitely gotten more electronic over time, and Hans Zimmer's film scores are kind of in a league of their own. Seeing Nicolaas Jaar tied it together a bit, since he mixes a lot of acoustic sounds into his electronic music.
 
-Cluster 3 artists - "Alternative/Acoustic" - tended to have lower valence and higher acousticness, including Bon Iver, The xx, and Father John Misty. Some of these artists also have a more "live" sound, including "Toots & The Maytals" and "Preservation Hall Jazz Band."
+#### Cluster #3: "Alternative/Acoustic"
+Cluster 3 artists generally came in higher on the Y-Axis compared to the other groups, as they tended to have lower valence and higher acousticness. Some big names here were Bon Iver, The xx, and Father John Misty. Some of these artists also had a more "live" sound, including "Toots & The Maytals" and "Preservation Hall Jazz Band."
 
-While the groupings are far from perfect, this was an awesome dataset and really fun to pull together. Those interested can find the code and data on [GitHub](https://github.com/charlie86/coachellaR){:target="_blank"}. 
+While the groupings were far from perfect, this was an awesome dataset and really fun to pull together. Those interested can find the code and data on [GitHub](https://github.com/charlie86/coachellaR){:target="_blank"}. 
 
 Thanks for reading, and be sure to comment below with your thoughts.
