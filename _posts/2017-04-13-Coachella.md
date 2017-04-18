@@ -157,7 +157,7 @@ artists$artist_uri <- map_chr(artists$name, function(x) {
     } else {
         artist_uri <- res$artist_uri[1]
     }
-    Sys.sleep(.05) # rate limiting
+    Sys.sleep(.1) # rate limiting
     return(artist_uri)
 })
 
