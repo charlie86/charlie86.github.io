@@ -1,0 +1,482 @@
+---
+layout: post
+title: fitteR happieR
+subtitle: Determinando la canción mas depresiva de Radiohead con R, usando los API de Spotify y Genius Lyrics
+bigimg: /img/ifwesmilecanwegohd.jpg
+---
+Radiohead ha sido mi grupo favorito por un tiempo, así que estoy acustumbrado a la gente sugerir que yo ponga algo "menos deprimida." Mucho de la música de Radiohead es triste sin duda, y este estudio cuenta de mi misión de cuantificar dicha tristeza, a concluir en una determinación con datos de su canción más depresiva.
+
+## Obtener Datos
+ 
+El [Web API](https://developer.spotify.com/web-api/){:target="_blank"} de Spotify incluye estadistícas detalladas para cada canción en su catalogo. Uno de estas medidas, "valencia," mide a la positividad de una canción. Desde la documentación oficial del API:
+
+> Una medida desde 0,0 a 1,0 que describe al positividad musical que evoca una canción. Canciones con valencia alta suena mas positiva (feliz, graciosa, euforial), mientras canciones con valencia baja suena mas negativa (triste, deprimida, enojada).
+
+Así que la valencia consiste de una medida de que tan triste una canción *suena* desde una perspectiva musical. Otro componente importante del sentimiento de una canción es la letra, y pasa que Genius Lyrics también tiene un [API](https://docs.genius.com/){:target="_blank"} para obtener datos de canciones. Para determinar la tristeza de una canción, he calculado un promedio pesado de valencia y sentimiento lírica. Primero, había que obtener los datos.
+
+<a href="#analysis">Haz cliq aquí para ir directamente al análisis! (pasar por encima de la configuración del API y como escrapar del web) </a>
+
+### API de Spotify
+
+El API de Spotify está bien documentado, sin embargo el proceso de obtener todas las canciones para un artista es bastante largo. En corto, Spotify tiene diferentes puntos de acceso para canciones, álbumes, y artistas, cada de uno necesita su propio "uri" de identificación para accesarlo. Para empezar, he creado una función para pegar al punto de acceso de `search` para obtener el `artist_uri` para una artista.
+
+```r
+library(tidyverse)
+library(httr)
+library(stringr)
+
+get_artists <- function(artist_name) {
+    
+    # Buscar al API de Spotify para nombre de artista
+    res <- GET('https://api.spotify.com/v1/search', query = list(q = artist_name, type = 'artist')) %>%
+        content %>% .$artists %>% .$items
+    
+    # Limpiar al resultado y combinar todos los artistas encontradas hasta un dataframe
+    artists <- map_df(seq_len(length(res)), function(x) {
+        list(
+            artist_name = res[[x]]$name,
+            artist_uri = str_replace(res[[x]]$uri, 'spotify:artist:', ''), # remove meta info from the uri string
+            artist_img = ifelse(length(res[[x]]$images) > 0, res[[x]]$images[[1]]$url, NA)
+        )
+    })
+    
+    return(artists)
+}
+artist_info <- get_artists('radiohead')
+
+str(artist_info)
+
+Classes ‘tbl_df’, ‘tbl’ and 'data.frame':	2 obs. of  3 variables:
+ $ artist_name: chr  "Radiohead" "Radiohead Tribute Band"
+ $ artist_uri : chr  "4Z8W4fKeB5YxbusRsdQVPb" "0ADkBHZhR2cVfANgK5gHQO"
+ $ artist_img : chr  "https://i.scdn.co/image/afcd616e1ef2d2786f47b3b4a8a6aeea24a72adc"
+
+# Eliminar resultados de otras artistas
+artist_info <- artist_info %>% 
+    filter(artist_name == 'Radiohead')
+```
+
+En seguido, he usado el `artist uri` obentida arriba para buscar a todos los álbumes de Radiohead.
+
+```r
+library(lubridate)
+
+get_albums <- function(artist_uri) {
+    albums <- GET(paste0('https://api.spotify.com/v1/artists/', artist_uri,'/albums')) %>% content
+    
+    map_df(1:length(albums$items), function(x) {
+        tmp <- albums$items[[x]]
+        
+        # Asegurar que el álbum_type no sea "single"
+        if (tmp$album_type == 'album') {
+            data.frame(album_uri = str_replace(tmp$uri, 'spotify:album:', ''),
+                       album_name = str_replace_all(tmp$name, '\'', ''),
+                       album_img = albums$items[[x]]$images[[1]]$url,
+                       stringsAsFactors = F) %>%
+                mutate(album_release_date = GET(paste0('https://api.spotify.com/v1/albums/', str_replace(tmp$uri, 'spotify:album:', ''))) %>% content %>% .$release_date, # you need a separate call to on "albums" to get release date.
+                       album_release_year = ifelse(nchar(album_release_date) == 4, year(as.Date(album_release_date, '%Y')), year(as.Date(album_release_date, '%Y-%m-%d'))) # not all album_release_dates have months, so I created album_release year for sorting
+                       )
+        } else {
+            NULL
+        }
+        
+    }) %>% filter(!duplicated(tolower(album_name))) %>%  # A veces hay varias versiones (con mayúscolos diferentes) del mismo álbum
+        arrange(album_release_year)
+}
+
+album_info <- get_albums(artist_info$artist_uri)
+
+str(album_info)
+
+'data.frame':	13 obs. of  5 variables:
+ $ album_uri         : chr  "6400dnyeDyD2mIFHfkwHXN" "500FEaUzn8lN9zWFyZG5C2"
+ $ album_name        : chr  "Pablo Honey" "The Bends" "OK Computer" "Kid A" ...
+ $ album_img         : chr  "https://i.scdn.co/image/e17011b2aa33289dfa6c08 ... " 
+ $ album_release_date: chr  "1993-02-22" "1995-03-28" "1997-05-28" ...
+ $ album_release_year: num  1993 1995 1997 2000 2001 ...
+
+# Eliminar los álbumes de remix y EP
+non_studio_albums <- c('TKOL RMX 1234567', 'In Rainbows Disk 2', 'Com Lag: 2+2=5', 'I Might Be Wrong')
+album_info <- filter(album_info, !album_name %in% non_studio_albums)
+```
+Armado con todos los `album uris`, he obtendio los datos de canciones para cada álbum. Para este paso, hay que registrarse con una cuenta de desarrollador de Spotify [aqui](https://developer.spotify.com/my-applications/#!/applications){:target="_blank"}.
+
+```r
+get_tracks <- function(artist_info, album_info) {
+    
+    client_id <- 'xxxxxxxxxxxxxxxxxx'
+    client_secret <- 'xxxxxxxxxxxxxxxxxx'
+    access_token <- POST('https://accounts.spotify.com/api/token',
+                         accept_json(), authenticate(client_id, client_secret),
+                         body = list(grant_type='client_credentials'),
+                         encode = 'form', httr::config(http_version=2)) %>% content %>% .$access_token
+    
+    track_info <- map_df(album_info$album_uri, function(x) {
+        tracks <- GET(paste0('https://api.spotify.com/v1/albums/', x, '/tracks')) %>% 
+            content %>% 
+            .$items 
+        
+        uris <- map(1:length(tracks), function(z) {
+            gsub('spotify:track:', '', tracks[z][[1]]$uri)
+        }) %>% unlist %>% paste0(collapse=',')
+        
+        res <- GET(paste0('https://api.spotify.com/v1/audio-features/?ids=', uris),
+                   query = list(access_token = access_token)) %>% content %>% .$audio_features
+        df <- unlist(res) %>% 
+            matrix(nrow = length(res), byrow = T) %>% 
+            as.data.frame(stringsAsFactors = F)
+        names(df) <- names(res[[1]])
+        df <- df %>% 
+            mutate(album_uri = x,
+                   track_number = row_number()) %>% 
+            rowwise %>% 
+            mutate(track_name = tracks[[track_number]]$name) %>%
+            ungroup %>% 
+            left_join(album_info, by = 'album_uri') %>% 
+            rename(track_uri = id) %>% 
+            select(-c(type, track_href, analysis_url, uri))
+        return(df)
+    }) %>%
+        mutate(artist_img = artist_info$artist_img) %>% 
+        mutate_at(c('album_uri', 'track_uri', 'album_release_date', 'track_name', 'album_name', 'artist_img'), funs(as.character)) %>%
+        mutate_at(c('danceability', 'energy', 'key', 'loudness', 'mode', 'speechiness', 'acousticness', 'album_release_year',
+                    'instrumentalness', 'liveness', 'valence', 'tempo', 'duration_ms', 'time_signature', 'track_number'), funs(as.numeric(gsub('[^0-9.-]+', '', as.character(.))))) # for some reason parse_number() from readr doesn't work here
+    return(track_info)
+}
+
+spotify_df <- get_tracks(artist_info, album_info)
+
+str(spotify_df)
+
+Classes ‘tbl_df’, ‘tbl’ and 'data.frame': 101 obs. of  22 variables:
+ $ danceability      : num  0.223 0.515 0.185 0.212 0.364 0.294 0.256 0.384 0.25 0.284 ...
+ $ energy            : num  0.706 0.43 0.964 0.696 0.37 0.813 0.906 0.717 0.62 0.825 ...
+ $ key               : num  9 7 9 2 7 4 2 6 0 7 ...
+ $ loudness          : num  -12.01 -9.94 -8.32 -10.06 -14.13 ...
+ $ mode              : num  1 1 1 1 1 0 1 1 1 1 ...
+ $ speechiness       : num  0.0581 0.0369 0.084 0.0472 0.0331 0.0547 0.0548 0.0339 0.0611 0.0595 ...
+ $ acousticness      : num  0.000945 0.0102 0.000659 0.000849 0.704 0.000101 NA 0.00281 0.000849 0.00968 ...
+ $ instrumentalness  : num  0.0068 0.000141 0.879 0.0165 NA 0.000756 0.366 0.569 0.0848 0.3 ...
+ $ liveness          : num  0.109 0.129 0.107 0.129 0.0883 0.333 0.322 0.187 0.175 0.118 ...
+ $ valence           : num  0.305 0.096 0.264 0.279 0.419 0.544 0.258 0.399 0.278 0.269 ...
+ $ tempo             : num  112.9 91.8 147.4 122.4 103.4 ...
+ $ track_uri         : chr  "1MyqLTRhgyWPw7v107BEuI" "6b2oQwSGFkzsMtQruIWm2p" "71wIOoaoVMUwskK5yCXZL4" ...
+ $ duration_ms       : num  208667 238640 132173 325627 161533 ...
+ $ time_signature    : num  3 4 4 4 4 4 4 4 4 4 ...
+ $ album_uri         : chr  "6400dnyeDyD2mIFHfkwHXN" "6400dnyeDyD2mIFHfkwHXN" "6400dnyeDyD2mIFHfkwHXN" ...
+ $ track_number      : num  1 2 3 4 5 6 7 8 9 10 ...
+ $ track_name        : chr  "You" "Creep" "How Do You?" "Stop Whispering" ...
+ $ album_name        : chr  "Pablo Honey" "Pablo Honey" "Pablo Honey" "Pablo Honey" ...
+ $ album_img         : chr  "https://i.scdn.co/image/e17011b2aa33289dfa6c0828a0e40d6b56ad8820" ...
+ $ album_release_date: chr  "1993-02-22" "1993-02-22" "1993-02-22" "1993-02-22" ...
+ $ album_release_year: num  1993 1993 1993 1993 1993 ...
+ $ artist_img        : chr  "https://i.scdn.co/image/afcd616e1ef2d2786f47b3b4a8a6aeea24a72adc" ...
+
+```
+
+Se nota que ese viene con más variables que necesario para esta análisis en particular, pero he eligido a incluirlos variables extras en la función para cualquier uso en el futuro.
+
+### API de Genius Lyrics
+
+Mientras esos datos han sido relativamente más fácil para obtener, todavía ha sido un proceso de varios pasos. Tan como con Spotify, he usado primero el punto `search` del API para obtener el `artist_id`. Vé [aquí](https://genius.com/signup_or_login){:target="_blank"} para registrarse con una cuenta de desarrolador para obtener un token del API.
+
+```r
+token <- 'xxxxxxxxxxxxxxxxxxxx'
+
+genius_get_artists <- function(artist_name, n_results = 10) {
+    baseURL <- 'https://api.genius.com/search?q=' 
+    requestURL <- paste0(baseURL, gsub(' ', '%20', artist_name),
+                         '&per_page=', n_results,
+                         '&access_token=', token)
+    
+    res <- GET(requestURL) %>% content %>% .$response %>% .$hits
+    
+    map_df(1:length(res), function(x) {
+        tmp <- res[[x]]$result$primary_artist
+        list(
+            artist_id = tmp$id,
+            artist_name = tmp$name
+        )
+    }) %>% unique
+}
+
+genius_artists <- genius_get_artists('radiohead')
+genius_artists
+
+# A tibble: 1 × 2
+  artist_id artist_name
+      <int>       <chr>
+1       604   Radiohead
+
+```
+En seguido, he hecho un bucle por los contentidos del punto `songs` (hay límite de 50 por página), grabando cada resulto (un listo con el url de la letra de las canciones) hasta que el parametro `next_page` ha resultado NULL.
+
+```r
+baseURL <- 'https://api.genius.com/artists/' 
+requestURL <- paste0(baseURL, genius_artists$artist_id[1], '/songs')
+
+track_lyric_urls <- list()
+i <- 1
+while (i > 0) {
+    tmp <- GET(requestURL, query = list(access_token = token, per_page = 50, page = i)) %>% content %>% .$response
+    track_lyric_urls <- c(track_lyric_urls, tmp$songs)
+    if (!is.null(tmp$next_page)) {
+        i <- tmp$next_page
+    } else {
+        break
+    }
+}
+
+length(track_lyric_urls)
+[1] 219
+
+summary(track_lyric_urls[[1]])
+
+                             Length Class  Mode     
+annotation_count             1      -none- numeric  
+api_path                     1      -none- character
+full_title                   1      -none- character
+header_image_thumbnail_url   1      -none- character
+header_image_url             1      -none- character
+id                           1      -none- numeric  
+lyrics_owner_id              1      -none- numeric  
+path                         1      -none- character
+pyongs_count                 1      -none- numeric  
+song_art_image_thumbnail_url 1      -none- character
+stats                        3      -none- list     
+title                        1      -none- character
+url                          1      -none- character
+primary_artist               8      -none- list  
+```
+Desde aquí, he usado `rvest` para escrapar los elementos "lyrics" de los urls de arriba.
+
+```r
+library(rvest)
+
+lyric_scraper <- function(url) {
+    read_html(url) %>% 
+        html_node('lyrics') %>% 
+        html_text
+}
+
+genius_df <- map_df(1:length(track_lyric_urls), function(x) {
+    # anadir mantenimiento de errores
+    lyrics <- try(lyric_scraper(track_lyric_urls[[x]]$url))
+    if (class(lyrics) != 'try-error') {
+        # eliminar texto que no sea letra y los espacios extras
+        lyrics <- str_replace_all(lyrics, '\\[(Verse [[:digit:]]|Pre-Chorus [[:digit:]]|Hook [[:digit:]]|Chorus|Outro|Verse|Refrain|Hook|Bridge|Intro|Instrumental)\\]|[[:digit:]]|[\\.!?\\(\\)\\[\\],]', '')
+        lyrics <- str_replace_all(lyrics, '\\n', ' ')
+        lyrics <- str_replace_all(lyrics, '([A-Z])', ' \\1')
+        lyrics <- str_replace_all(lyrics, ' {2,}', ' ')
+        lyrics <- tolower(str_trim(lyrics))
+    } else {
+        lyrics <- NA
+    }
+    
+    tots <- list(
+        track_name = track_lyric_urls[[x]]$title,
+        lyrics = lyrics
+    )
+    
+    return(tots)
+})
+
+str(genius_df)
+
+Classes ‘tbl_df’, ‘tbl’ and 'data.frame':   219 obs. of  2 variables:
+ $ track_name: chr  "15 Step" "2 + 2 = 5" "4 Minute Warning" "Airbag" ...
+ $ lyrics    : chr  "how come i end up where i started how come i end" ...
+```
+Después de un poco de reconciliación de nombres entre Spotify y Genius, he hecho un `left_join` de `genius_df` encima de `spotify_df` por `track_name` (la información de álbumes se sirverá bien luego).
+
+```r
+genius_df$track_name[genius_df$track_name == 'Packt Like Sardines in a Crushd Tin Box'] <- 'Packt Like Sardines in a Crushed Tin Box'
+genius_df$track_name[genius_df$track_name == 'Weird Fishes / Arpeggi'] <- 'Weird Fishes/ Arpeggi'
+genius_df$track_name[genius_df$track_name == 'A Punchup at a Wedding'] <- 'A Punch Up at a Wedding'
+genius_df$track_name[genius_df$track_name == 'Dollars and Cents'] <- 'Dollars & Cents'
+genius_df$track_name[genius_df$track_name == 'Bullet Proof...I Wish I Was'] <- 'Bullet Proof ... I Wish I was'
+
+genius_df <- genius_df %>% 
+    mutate(track_name_join = tolower(str_replace(track_name, '[[:punct:]]', ''))) %>% 
+    filter(!duplicated(track_name_join)) %>% 
+    select(-track_name)
+
+track_df <- spotify_df %>%
+    mutate(track_name_join = tolower(str_replace(track_name, '[[:punct:]]', ''))) %>%
+    left_join(genius_df, by = 'track_name_join') %>%
+    select(track_name, valence, duration_ms, lyrics, album_name, album_release_year, album_img)
+
+str(track_df)
+
+Classes ‘tbl_df’, ‘tbl’ and 'data.frame':   101 obs. of  8 variables:
+ $ track_name        : chr  "You" "Creep" "How Do You?" "Stop Whispering" ...
+ $ track_number      : num  1 2 3 4 5 6 7 8 9 10 ...
+ $ valence           : num  0.305 0.096 0.264 0.279 0.419 0.544 0.258 0.399 0.278 0.269 ...
+ $ duration_ms       : num  208667 238640 132173 325627 161533 ...
+ $ lyrics            : chr  "you are the sun and moon and stars are you and i could" ...
+ $ album_name        : chr  "Pablo Honey" "Pablo Honey" "Pablo Honey" "Pablo Honey" ...
+ $ album_release_year: num  1993 1993 1993 1993 1993 ...
+ $ album_img         : chr  "https://i.scdn.co/image/e17011b2aa33289dfa6c0828a0e40d6b5" ...
+```
+<a name="analysis">
+!Ya al análisis!
+
+## Cuantificar el Sentimiento
+Usando solo la valencia, la calculación de la canción mas triste es bastante simple - la canción con la valencia mas baja gana.
+
+```r
+track_df %>% 
+    select(valence, track_name) %>%
+    arrange(valence) %>% 
+    slice(1:10)
+
+    valence                      track_name
+1    0.0378             We Suck Young Blood
+2    0.0378                 True Love Waits
+3    0.0400                     The Tourist
+4    0.0425       Motion Picture Soundtrack
+5    0.0458                Sail To The Moon
+6    0.0468                       Videotape
+7    0.0516            Life In a Glasshouse
+8    0.0517 Tinker Tailor Soldier Sailor...
+9    0.0545                     The Numbers
+10   0.0585   Everything In Its Right Place
+```
+
+Ojalá que fuera tan fácil. "True Love Waits" y "We Suck Young Blood" empaten aquí, cada uno con una valencia de 0.0378, lo que demuestra aún mas la importancia de incluir la letra. 
+
+Mientras la valencia sirve como una medida simple para mostrar el sentimiento musical, la emoción detrás de la letra es mas elusiva. Para encontrar la canción mas deprimida, he empleado el análisis de sentimiento para identifcar palabras asociadas con la tristeza. Especificamente, he usado `tidytext` y el lexicón de NRC, lo que viene de un [proyecto](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm){:target="_blank"} de la Consela de Investigación Nacional de Canada. Este lexicón contiene varias emociones (tristeza, felicidad, enojada, sorpresa, etc.) y las palabras determinadas para evocarlas con alta probabilidad.
+
+Para cuantifcar la tristeza de la letra, he calculado la proporción de palabras "tristes" por canción, dejando de las palabras "stopwords", las que no llevan emoción (por ejemplo "the," "and," "I").
+
+```r
+library(tidytext)
+
+sad_words <- sentiments %>% 
+    filter(lexicon == 'nrc', sentiment == 'sadness') %>% 
+    select(word) %>% 
+    mutate(sad = T)
+
+sent_df <- track_df %>% 
+    unnest_tokens(word, lyrics) %>%
+    anti_join(stop_words, by = 'word') %>%
+    left_join(sad_words, by = 'word') %>%
+    group_by(track_name) %>% 
+    summarise(pct_sad = round(sum(sad, na.rm = T) / n(), 4),
+              word_count = n()) %>% 
+    ungroup
+
+sent_df %>% 
+    select(pct_sad, track_name) %>%
+    arrange(-pct_sad) %>% 
+    head(10)
+
+   pct_sad              track_name
+     <dbl>                   <chr>
+1   0.3571            High And Dry
+2   0.2955              Backdrifts
+3   0.2742       Give Up The Ghost
+4   0.2381         True Love Waits
+5   0.2326 Exit Music (For a Film)
+6   0.2195            Karma Police
+7   0.2000            Planet Telex
+8   0.1875                Let Down
+9   0.1842 A Punch Up At a Wedding
+10  0.1800               Identikit
+```
+Por porcentaje de palabras tristes, la canción "High and Dry" gana, con unos 36% de su letra con palabras tristes. Especificamente, el algorítmo ha identificado las palabras "broke," "fall," "hate,", "kill," y "leave" - el último de ellos se ha repitido 15 veces en el refrán ("Don't leave me high, don't leave me dry.")
+
+## Densidad Lírica
+A combinar la tristeza lírica con la musical, he seguido a un [análisis](https://www.r-bloggers.com/everything-in-its-right-place-visualization-and-content-analysis-of-radiohead-lyrics/){:target="_blank"} de Myles Harrison, quién también tiene blog de R, lo que por casualidad también ha tratado con la letra del mismo Radiohead. Él ha explorado al concepto de la "densidad lírica," lo que es, segun él mismo - "el número de palabras por canción dividido por la duración de la canción." De una manera, se puede interpretar este como tan "importante" la letra sea para una canción, lo que hace que sirva como una medida pesante perfecto para el análisis mío. Se nota que mi versión de la densidad lírica se ha modificado como que no incluye los stopwords.
+
+Usando la duración y el número de palabras, he calculado la densidad lírica de cada canción. Para crear el "índice de tristeza" final, he tomado el promedio de la valencia y el porcentaje de palabras tristes por cada canción, pesado por la densidad lírica.
+
+<img src="/img/posts/fitterhappier/gloom_index.png">
+
+También he cambiado la escala de la medida para que se encuentra entre 1 y 100, como que la canción mas triste ha tenido un 1 y la canción menos triste un 100.
+
+```r
+library(scales)
+
+track_df <- track_df %>% 
+    left_join(sent_df, by = 'track_name') %>% 
+    mutate_at(c('pct_sad', 'word_count'), funs(ifelse(is.na(.), 0, .))) %>% 
+    mutate(lyrical_density = word_count / duration_ms * 1000,
+           gloom_index = round(rescale(1 - ((1 - valence) + (pct_sad * (1 + lyrical_density))) / 2, to = c(1, 100)), 2)) 
+```
+Ritmos...
+```r
+track_df %>%
+    select(gloom_index, track_name) %>%
+	arrange(gloom_index) %>%
+	head(10)
+
+    gloom_index                track_name
+          <dbl>                     <chr>
+1          1.00           True Love Waits
+2          6.46         Give Up The Ghost
+3          9.35 Motion Picture Soundtrack
+4         13.70                  Let Down
+5         14.15              Pyramid Song
+6         14.57   Exit Music (For a Film)
+7         15.29           Dollars & Cents
+8         15.69              High And Dry
+9         15.80 Tinker Tailor Soldier ...
+10        16.03                 Videotape
+```
+Ya tenemos el ganador! "True Love Waits" es oficialmente la canción mas depresiva de Radiohead hasta hoy. Y lo merece, dando que ha "tied" para la valencia mas baja (0.0378) y ha situado cuatro para el porcentaje más alta de palabras tristes (24%). Si los numeros todavía no se convence, solo hay que [escucharla](https://vimeo.com/170620454){:target="_blank"}. 
+
+Para ver como la tristeza se ha evolucionado por todos los nueve álbumes, he calculado el promedio del índice de tristeza para cada álbum y hecho un gráfico con cada canción por la fecha en que salió el álbum. Para dar mas vida al gráfico de `highcharter`, he creado un tooltip original que incluye los imágenes de los álbumes por los `album_img` de Spotify.
+
+```r
+library(RColorBrewer)
+library(highcharter)
+
+plot_df <- track_df %>% 
+    rowwise %>% 
+    mutate(tooltip = paste0('<a style = "margin-right:', max(max(nchar(track_name), nchar(album_name)) * 7, 55), 'px">', # tamaño dinámico
+                            '<img src=', album_img, ' height="50" style="float:left;margin-right:5px">',
+                            '<b>Album:</b> ', album_name,
+                            '<br><b>Track:</b> ', track_name)) %>% 
+    ungroup
+
+avg_line <- plot_df %>% 
+    group_by(album_release_year, album_name, album_img) %>% 
+    summarise(avg = mean(gloom_index)) %>% 
+    ungroup %>% 
+    transmute(x = as.numeric(as.factor(album_release_year)), 
+              y = avg,
+              tooltip = paste0('<a style = "margin-right:55px">',
+                               '<img src=', album_img, ' height="50" style="float:left;margin-right:5px">',
+                               '<b>Album:</b> ', album_name,
+                               '<br><b>Average Gloom Index:</b> ', round(avg, 2),
+                               '</a>'))
+plot_track_df <- plot_df %>% 
+    mutate(tooltip = paste0(tooltip, '<br><b>Gloom Index:</b> ', gloom_index, '</a>'),
+           album_number = as.numeric(as.factor(album_release_year))) %>% 
+    ungroup
+
+album_chart <- hchart(plot_track_df, 'scatter', hcaes(x = as.numeric(as.factor(album_release_year)), y = gloom_index, group = album_name)) %>% 
+    hc_add_series(data = avg_line, type = 'line') %>%
+    hc_tooltip(formatter = JS(paste0("function() {return this.point.tooltip;}")), useHTML = T) %>% 
+    hc_colors(c(sample(brewer.pal(n_distinct(track_df$album_name), 'Paired')), 'black')) %>% 
+    hc_xAxis(title = list(text = 'Album'), labels = list(enabled = F)) %>% 
+    hc_yAxis(max = 100, title = list(text = 'Gloom Index')) %>% 
+    hc_title(text = 'Data Driven Depression') %>% 
+    hc_subtitle(text = 'Radiohead song sadness by album') %>% 
+    hc_add_theme(hc_theme_smpl())
+album_chart$x$hc_opts$series[[10]]$name <- 'Album Averages'
+album_chart
+```
+<a href="/htmlwidgets/fitterhappier/album_chart.html" target="_blank"><img src="/img/posts/fitterhappier/fitter_happier_gif.gif"></a>
+
+[Haz click aquí para ver al gráfico en nueva ventana](/htmlwidgets/fitterhappier/album_chart.html){:target="_blank"}
+
+Desde todos los nueve albumes de estudio, lo mas recién de Radiohead, "A Moon Shaped Pool," tiene el promedio del índice de tristeza más bajo. Eso se debe mucho al hecho de que su final, "True Love Waits," era la canción más triste de todas. También se nota que "A Moon Shaped Pool" ha roto una tendencia de álbumes cada vez menos depresiva desde que salió "Hail to the Thief" en 2003 y que sigue directamente al álbum menos triste, "The King of Limbs."
+
+Esos datos han sido muy divertidos con que trabajar, y queda bastante investigación interesante para explorar (comparaciones entre artistas, tristeza adentro de un álbum, aspectos de canciones adicionales, etc.). De hecho, Andrew Clark ha hecho este [app de RShiny](https://mytinyshinys.shinyapps.io/spotifyFlexDB/){:target="_blank"} increíble que se permite explorar la valencia, bailabilidad, y instrumentaleza de cualquier artista que quiera - échale un viztazo! 
+
+Para explorar más la emoción de tus artistas y playlists de Spotify favoritas, he hecho un app como [explorador de emoción musical](https://rcharlie.net/sentify){:target="_blank"} con RShiny, lo que he creado en conjunción de este artículo del Economista.
+
+<b><em>Corrección: March 1, 2017</em></b>
+<br><em>El índice de tristeza para "Weird Fishes/ Arpeggi" en una versión anterior de este estudio fue calculado erróneamente sin letra por una descrepancia de nombres entre los API de Genius and Spotify. Resolverlo ha hecho caer el índice de tristeza de la canción desde 40.43 hasta 25.1 y el promedio del álbum "In Rainbows" desde 53.85 a 52.13. El gráfico y texto se han corregido para reflejar este cambio, y el código de `hchart` ahora está compatible con la versión 0.5.0 de `highcharter`. El código para escrapar al Genius Lyrics también se ha corregido para incluir el mantimiento de errores y eliminar la puntuación y información meta contentido en la letra, ninguno de ellos han afectado significamente al índice de tristeza de la versión anterior.</em>
