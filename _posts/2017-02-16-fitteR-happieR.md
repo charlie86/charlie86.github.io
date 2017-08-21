@@ -26,9 +26,16 @@ library(httr)
 library(stringr)
 
 get_artists <- function(artist_name) {
+
+    client_id <- 'xxxxxxxxxxxxxxxxxx'
+    client_secret <- 'xxxxxxxxxxxxxxxxxx'
+    access_token <- POST('https://accounts.spotify.com/api/token',
+                         accept_json(), authenticate(client_id, client_secret),
+                         body = list(grant_type='client_credentials'),
+                         encode = 'form', httr::config(http_version=2)) %>% content %>% .$access_token
     
     # Search Spotify API for artist name
-    res <- GET('https://api.spotify.com/v1/search', query = list(q = artist_name, type = 'artist')) %>%
+    res <- GET('https://api.spotify.com/v1/search', query = list(q = artist_name, type = 'artist', access_token = access_token)) %>%
         content %>% .$artists %>% .$items
     
     # Clean response and combine all returned artists into a dataframe
@@ -62,7 +69,15 @@ Next, I used the `artist uri` obtained above to search for all of Radiohead's al
 library(lubridate)
 
 get_albums <- function(artist_uri) {
-    albums <- GET(paste0('https://api.spotify.com/v1/artists/', artist_uri,'/albums')) %>% content
+    
+    client_id <- 'xxxxxxxxxxxxxxxxxx'
+    client_secret <- 'xxxxxxxxxxxxxxxxxx'
+    access_token <- POST('https://accounts.spotify.com/api/token',
+                         accept_json(), authenticate(client_id, client_secret),
+                         body = list(grant_type='client_credentials'),
+                         encode = 'form', httr::config(http_version=2)) %>% content %>% .$access_token
+
+    albums <- GET(paste0('https://api.spotify.com/v1/artists/', artist_uri,'/albums'), query = list(access_token = access_token)) %>% content
     
     map_df(1:length(albums$items), function(x) {
         tmp <- albums$items[[x]]
@@ -73,7 +88,7 @@ get_albums <- function(artist_uri) {
                        album_name = str_replace_all(tmp$name, '\'', ''),
                        album_img = albums$items[[x]]$images[[1]]$url,
                        stringsAsFactors = F) %>%
-                mutate(album_release_date = GET(paste0('https://api.spotify.com/v1/albums/', str_replace(tmp$uri, 'spotify:album:', ''))) %>% content %>% .$release_date, # you need a separate call to on "albums" to get release date.
+                mutate(album_release_date = GET(paste0('https://api.spotify.com/v1/albums/', str_replace(tmp$uri, 'spotify:album:', '')), access_token = access_token) %>% content %>% .$release_date, # you need a separate call to on "albums" to get release date.
                        album_release_year = ifelse(nchar(album_release_date) == 4, year(as.Date(album_release_date, '%Y')), year(as.Date(album_release_date, '%Y-%m-%d'))) # not all album_release_dates have months, so I created album_release year for sorting
                        )
         } else {
