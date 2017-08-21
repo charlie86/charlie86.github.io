@@ -88,7 +88,7 @@ get_albums <- function(artist_uri) {
                        album_name = str_replace_all(tmp$name, '\'', ''),
                        album_img = albums$items[[x]]$images[[1]]$url,
                        stringsAsFactors = F) %>%
-                mutate(album_release_date = GET(paste0('https://api.spotify.com/v1/albums/', str_replace(tmp$uri, 'spotify:album:', '')), access_token = access_token) %>% content %>% .$release_date, # you need a separate call to on "albums" to get release date.
+                mutate(album_release_date = GET(paste0('https://api.spotify.com/v1/albums/', str_replace(tmp$uri, 'spotify:album:', '')), query = list(access_token = access_token)) %>% content %>% .$release_date, # you need a separate call to on "albums" to get release date.
                        album_release_year = ifelse(nchar(album_release_date) == 4, year(as.Date(album_release_date, '%Y')), year(as.Date(album_release_date, '%Y-%m-%d'))) # not all album_release_dates have months, so I created album_release year for sorting
                        )
         } else {
