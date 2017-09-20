@@ -128,7 +128,7 @@ get_tracks <- function(artist_info, album_info) {
                          encode = 'form', httr::config(http_version=2)) %>% content %>% .$access_token
     
     track_info <- map_df(album_info$album_uri, function(x) {
-        tracks <- GET(paste0('https://api.spotify.com/v1/albums/', x, '/tracks')) %>% 
+        tracks <- GET(paste0('https://api.spotify.com/v1/albums/', x, '/tracks'), query = list(access_token = access_token)) %>% 
             content %>% 
             .$items 
         
